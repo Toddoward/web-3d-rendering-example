@@ -26,9 +26,9 @@ const lPos = [
   sph(LR, PI*0.88, PI*1.82),
 ];
 const lCol = [
-  new THREE.Vector3(1.00, 0.92, 0.80),
+  new THREE.Vector3(0.87, 0.95, 0.90),
   new THREE.Vector3(1.00, 0.10, 0.05),
-  new THREE.Vector3(0.30, 1.00, 0.05),
+  new THREE.Vector3(0.10, 1.00, 0.05),
   new THREE.Vector3(0.10, 0.05, 1.00),
 ];
 
@@ -123,7 +123,18 @@ const mat = new THREE.ShaderMaterial({
     }
 
     // ── SDF ──
-    float _octa(vec3 p, float s){ p=abs(p); return (p.x+p.y+p.z-s)*0.57735027; }
+    // Exact rounded octahedron SDF (Inigo Quilez)
+    float _octa(vec3 p, float s){
+      p = abs(p);
+      float m = p.x+p.y+p.z-s;
+      vec3 q;
+      if(3.0*p.x < m) q = p.xyz;
+      else if(3.0*p.y < m) q = p.yzx;
+      else if(3.0*p.z < m) q = p.zxy;
+      else return m*0.57735027;
+      float k = clamp(0.5*(q.z-q.y+s), 0.0, s);
+      return length(vec3(q.x, q.y-s+k, q.z-k));
+    }
     float _smin(float a,float b,float k){ float h=clamp(.5+.5*(b-a)/k,0.,1.); return mix(b,a,h)-k*h*(1.-h); }
     mat3 rotY(float a){ float c=cos(a),s=sin(a); return mat3(c,0,s, 0,1,0, -s,0,c); }
     mat3 rotX(float a){ float c=cos(a),s=sin(a); return mat3(1,0,0, 0,c,-s, 0,s,c); }
@@ -131,7 +142,7 @@ const mat = new THREE.ShaderMaterial({
     float _scene(vec3 p){
       // 정팔면체: +방향 회전
       vec3 po = rotX(uTime*0.18) * rotY(uTime*0.32) * p;
-      float octa = _octa(po, 1.0) - 0.04;
+      float octa = _octa(po, 1.0) - 0.03;
 
       // 블롭: -방향 회전 (역수)
       vec3 pb = rotX(-uTime*0.18) * rotY(-uTime*0.32) * p;
@@ -139,7 +150,7 @@ const mat = new THREE.ShaderMaterial({
       vec3  q    = pb * 2.5 + t;
       vec3  w    = q + 0.1*vec3(_vn(q), _vn(q+vec3(5.2,1.3,0.)), _vn(q+vec3(1.7,9.2,0.)));
       float blob = length(pb) - 0.72 - (_vn(w)-0.75)*0.25;
-      return _smin(octa, blob, 0.12);
+      return _smin(octa, blob, 0.1);
     }
 
     vec3 _normal(vec3 p){
