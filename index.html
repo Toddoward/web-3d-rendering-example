@@ -51,7 +51,7 @@ if (!prefersReducedMotion) {
 //   모바일: DPR=1 (4× 픽셀 감소), AA 비활성, 30fps 캡
 //   데스크탑: DPR=min(dpr, 1.5), AA 활성, 60fps
 const isMobile     = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
-const targetDPR    = isMobile ? 1.0 : Math.min(devicePixelRatio, 1.5);
+const targetDPR    = isMobile ? 0.5 : Math.min(devicePixelRatio, 1.5);
 const FPS_CAP      = isMobile ? 30 : 60;
 const FPS_INTERVAL = 1000 / FPS_CAP;
 
