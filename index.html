@@ -1,68 +1,132 @@
 <!DOCTYPE html>
 <html>
 <head>
-<title>PrismQ</title>
+<title>Prism3D</title>
 <style>*{margin:0;padding:0}body{overflow:hidden}canvas{display:block}</style>
 </head>
 <body>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
-const scene  = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(40, innerWidth/innerHeight, 0.1, 100);
+// ═══════════════════════════════════════════════════════
+//  SCENE SETUP
+// ═══════════════════════════════════════════════════════
+const scene    = new THREE.Scene();
+const camera   = new THREE.PerspectiveCamera(40, innerWidth/innerHeight, 0.1, 100);
 camera.position.z = 5;
-const renderer = new THREE.WebGLRenderer({ antialias:true });
-renderer.setSize(innerWidth, innerHeight);
-renderer.setPixelRatio(Math.min(devicePixelRatio,2));
 
-// ── 배경색 설정 ──
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+
 const BG_COLOR = '#5866A5';
 renderer.setClearColor(new THREE.Color(BG_COLOR), 1.0);
 document.body.style.background = BG_COLOR;
 document.body.appendChild(renderer.domElement);
 
-// ── 4광원 구면좌표 ──
+// ═══════════════════════════════════════════════════════
+//  LIGHTING  —  4광원 구면좌표 배치
+//  sph(r, polar, azimuth): 반경 r, 극각 θ, 방위각 φ
+//  LR=13.0: 광원이 오브젝트에서 13 unit 떨어진 거리
+// ═══════════════════════════════════════════════════════
 const PI = Math.PI;
-function sph(r,t,p){ return new THREE.Vector3(r*Math.sin(t)*Math.cos(p), r*Math.cos(t), r*Math.sin(t)*Math.sin(p)); }
-const LR = 13.0;
+function sph(r, t, p) {
+  return new THREE.Vector3(
+    r * Math.sin(t) * Math.cos(p),
+    r * Math.cos(t),
+    r * Math.sin(t) * Math.sin(p)
+  );
+}
+const LR   = 13.0;
 const lPos = [
-  sph(LR, PI*0.22, PI*0.28),
-  sph(LR, PI*0.68, PI*1.25),
-  sph(LR, PI*0.50, PI*0.04),
-  sph(LR, PI*0.88, PI*1.82),
+  sph(LR, PI*0.22, PI*0.28),   // 상단 우측 앞
+  sph(LR, PI*0.68, PI*1.25),   // 중간 좌측 뒤
+  sph(LR, PI*0.50, PI*0.04),   // 중간 정면
+  sph(LR, PI*0.88, PI*1.82),   // 하단 뒤
 ];
 const lCol = [
-  new THREE.Vector3(1.00, 1.00, 1.00),  // 순백 (주 하이라이트, 분산의 베이스)
-  new THREE.Vector3(0.75, 0.88, 1.00),  // 쿨 화이트 (은청 톤, 그림자 영역 틴트)
-  new THREE.Vector3(1.00, 0.95, 0.82),  // 웜 화이트 (아이보리, 반대편 하이라이트)
-  new THREE.Vector3(0.65, 0.78, 0.88),  // 소프트 스틸 블루 (전체 앰비언트 틴트)
+  new THREE.Vector3(0.87, 0.95, 0.90),  // 페일 민트 (주광)
+  new THREE.Vector3(1.00, 0.10, 0.05),  // 레드
+  new THREE.Vector3(0.10, 1.00, 0.05),  // 그린
+  new THREE.Vector3(0.10, 0.05, 1.00),  // 블루
 ];
 
+// ═══════════════════════════════════════════════════════
+//  DYNAMIC UNIFORMS  —  매 프레임 CPU→GPU 전달
+// ═══════════════════════════════════════════════════════
 const uTime        = { value: 0.0 };
-const uMatWorldInv = { value: new THREE.Matrix4() };
-const uModelMat    = { value: new THREE.Matrix4() };
-const uNormalMat   = { value: new THREE.Matrix3() };
+const uMatWorldInv = { value: new THREE.Matrix4() };  // 오브젝트→카메라 공간 변환 역행렬
+const uModelMat    = { value: new THREE.Matrix4() };  // 오브젝트→월드 공간 변환
+const uNormalMat   = { value: new THREE.Matrix3() };  // 법선벡터 월드 공간 변환 (modelMatrix 역전치)
 
+// ═══════════════════════════════════════════════════════
+//  MATERIAL
+// ═══════════════════════════════════════════════════════
 const mat = new THREE.ShaderMaterial({
   transparent: true,
-  blending: THREE.CustomBlending,
-  blendSrc: THREE.OneFactor,
-  blendDst: THREE.OneMinusSrcAlphaFactor,
-  depthWrite: false,
-  side: THREE.FrontSide,
+  // Premultiplied Alpha 블렌딩:
+  //   diffuse는 alpha 가중치 적용, specular는 완전 가산(additive)
+  //   출력: vec4(diffuse*alpha + specular, alpha)
+  blending:    THREE.CustomBlending,
+  blendSrc:    THREE.OneFactor,
+  blendDst:    THREE.OneMinusSrcAlphaFactor,
+  depthWrite:  false,
+  side:        THREE.FrontSide,
+
   uniforms: {
     uTime:        uTime,
     uMatWorldInv: uMatWorldInv,
     uModelMat:    uModelMat,
     uNormalMat:   uNormalMat,
     uCamPos:      { value: camera.position },
-    uTransp:      { value: 0.25 },   // 0=Fresnel 투명, 1=완전불투명
-    uRoughness:   { value: 0.5 },   // 0=거울유리, 1=서리유리
+
+    // 머티리얼 파라미터
+    uTransp:   { value: 0.55 },  // 0=Fresnel 기반 투명 / 1=완전 불투명
+    uRoughness:{ value: 0.30 },  // 0=거울 유리          / 1=서리 유리
+
+    // blob displacement 억제 방향
+    // 해당 방향과 평행한 위치(pole)에서 blob이 사라지고 정팔면체 면이 노출됨
+    // 정팔면체 면 노멀 = normalize(±1, ±1, ±1) ≈ 0.577
+    uPoleDir: { value: new THREE.Vector3(0.577, -0.577, -0.577) },
+
+    // ── Displacement 영역 smoothstep 파라미터 ──────────────
+    // uDispPoleEdge: poleMask smoothstep 전환 구간 (edge0, edge1)
+    //   낮추면 → pole 근처까지 blob 확장 / 높이면 → pole에만 집중
+    uDispPoleEdge: { value: new THREE.Vector2(0.35, 0.65) },
+    // uDispGravEdge: gravBias smoothstep 입력 구간 (-y 기준)
+    //   x: 하반구 시작점 / y: 상반구 종료점
+    uDispGravEdge: { value: new THREE.Vector2(-0.2, 0.6) },
+    // uDispGravBias: gravBias 가중치 (x=베이스, y=진폭)
+    //   결과: x + y * smoothstep(...)  →  범위: x ~ (x+y)
+    uDispGravBias: { value: new THREE.Vector2(0.7, 0.3) },
+
+    // ── Emissive 영역 smoothstep 파라미터 ──────────────────
+    // displacement와 독립적으로 자발광 영역을 별도 제어
+    // uEmissPoleEdge: emissive poleMask 전환 구간
+    //   displacement보다 넓게 설정 → 발광 영역이 displacement보다 크게
+    uEmissPoleEdge: { value: new THREE.Vector2(0.0, 0.475) },
+    // uEmissGravEdge: emissive gravBias smoothstep 입력 구간
+    uEmissGravEdge: { value: new THREE.Vector2(-0.2, 0.6) },
+    // uEmissGravBias: emissive gravBias 가중치 (x=베이스, y=진폭)
+    uEmissGravBias: { value: new THREE.Vector2(0.7, 0.3) },
+
+    // 무지개 파라미터 (레퍼런스 이미지 분석 기준)
+    uIridExp:      { value: 1.2  },  // irid 분포 exponent: 낮을수록 면 전체로 퍼짐 (레퍼런스: 면 전체 무지개 띠)
+    uIridStr:      { value: 1.2  },  // irid 강도 (레퍼런스: 옥타 면 moderate 무지개)
+    uPrismStr:     { value: 10.0 },  // 스펙트럼 분산 배율 (레퍼런스: 면 안 날카로운 스펙트럼 선)
+    uPrismDisp:    { value: 0.013 },  // Cauchy 분산 계수 (레퍼런스: 파장 분리 뚜렷)
+    uSemiEmissStr: { value: 0.35  },  // 블롭 자발광 강도 (레퍼런스: 블롭 강한 채도 자발광)
+
     uLPos1: { value: lPos[0] }, uLPos2: { value: lPos[1] },
     uLPos3: { value: lPos[2] }, uLPos4: { value: lPos[3] },
     uLCol1: { value: lCol[0] }, uLCol2: { value: lCol[1] },
     uLCol3: { value: lCol[2] }, uLCol4: { value: lCol[3] },
   },
 
+  // ─────────────────────────────────────────────────────
+  //  VERTEX SHADER
+  //  오브젝트 공간 position과 카메라 위치를 fragment로 전달
+  //  레이마칭은 fragment shader에서 오브젝트 공간 기준으로 수행
+  // ─────────────────────────────────────────────────────
   vertexShader: `
     uniform mat4 uMatWorldInv;
     varying vec3 vObjPos;
@@ -74,20 +138,37 @@ const mat = new THREE.ShaderMaterial({
     }
   `,
 
+  // ─────────────────────────────────────────────────────
+  //  FRAGMENT SHADER
+  // ─────────────────────────────────────────────────────
   fragmentShader: `
     #define PI 3.14159265359
+
     uniform float uTime;
     uniform mat4  uModelMat;
     uniform mat3  uNormalMat;
     uniform vec3  uCamPos;
     uniform float uTransp;
     uniform float uRoughness;
+    uniform vec3  uPoleDir;
+    uniform float uIridExp;
+    uniform float uIridStr;
+    uniform float uPrismStr;
+    uniform float uPrismDisp;
+    uniform float uSemiEmissStr;
+    uniform vec2  uDispPoleEdge;
+    uniform vec2  uDispGravEdge;
+    uniform vec2  uDispGravBias;
+    uniform vec2  uEmissPoleEdge;
+    uniform vec2  uEmissGravEdge;
+    uniform vec2  uEmissGravBias;
     uniform vec3  uLPos1, uLPos2, uLPos3, uLPos4;
     uniform vec3  uLCol1, uLCol2, uLCol3, uLCol4;
     varying vec3  vObjPos;
     varying vec3  vCamObjPos;
 
-    // ── 3D Simplex Noise ──
+    // ── [1] 3D Simplex Noise ───────────────────────────
+    //  출력 범위 [0, 1]로 remapping
     vec3 _mod289v3(vec3 x){return x-floor(x*(1./289.))*289.;}
     vec4 _mod289v4(vec4 x){return x-floor(x*(1./289.))*289.;}
     vec4 _permute(vec4 x){return _mod289v4(((x*34.)+1.)*x);}
@@ -135,8 +216,9 @@ const mat = new THREE.ShaderMaterial({
       return .5+.5*(42.*dot(m*m,vec4(dot(p0,x0),dot(p1,x1),dot(p2,x2),dot(p3,x3))));
     }
 
-    // ── SDF ──
-    // Exact rounded octahedron SDF (Inigo Quilez)
+    // ── [2] SDF 프리미티브 ────────────────────────────
+    //  Inigo Quilez 정확 정팔면체 SDF
+    //  s: 꼭짓점까지의 거리 (외접구 반지름 ≈ s)
     float _octa(vec3 p, float s){
       p = abs(p);
       float m = p.x+p.y+p.z-s;
@@ -148,90 +230,134 @@ const mat = new THREE.ShaderMaterial({
       float k = clamp(0.5*(q.z-q.y+s), 0.0, s);
       return length(vec3(q.x, q.y-s+k, q.z-k));
     }
-    float _smin(float a,float b,float k){ float h=clamp(.5+.5*(b-a)/k,0.,1.); return mix(b,a,h)-k*h*(1.-h); }
+    // C1 연속 Smooth Minimum: k=블렌딩 반경
+    float _smin(float a, float b, float k){
+      float h=clamp(.5+.5*(b-a)/k,0.,1.);
+      return mix(b,a,h)-k*h*(1.-h);
+    }
     mat3 rotY(float a){ float c=cos(a),s=sin(a); return mat3(c,0,s, 0,1,0, -s,0,c); }
     mat3 rotX(float a){ float c=cos(a),s=sin(a); return mat3(1,0,0, 0,c,-s, 0,s,c); }
 
+    // ── [3] SDF 씬 컴포지션 ───────────────────────────
     float _scene(vec3 p){
-      // 정팔면체
-      vec3 po = rotX(uTime*0.18) * rotY(uTime*0.32) * p;
-      float octa = _octa(po, 1.0) - 0.03;
 
-      // 액체 느낌
-      vec3 pb = rotX(-uTime*0.18) * rotY(-uTime*0.32) * p;
-      float t    = uTime * 0.18;
-      vec3  q    = pb * 2.5 + t;
-      vec3  w    = q + 0.1*vec3(_vn(q), _vn(q+vec3(5.2,1.3,0.)), _vn(q+vec3(1.7,9.2,0.)));
-      float blob = length(pb) - 0.72 - (_vn(w)-0.75)*0.25;
+      // 공통 회전 좌표 (octa·blob 동일 속도·방향 공회전)
+      vec3  po       = rotX(uTime*0.06) * rotY(-uTime*0.11) * p;
+
+      // 정팔면체 (s=1.0, bevel=0.01)
+      // _octa 결과를 octaDist에 캐싱 → octa와 octaShell 모두 재사용
+      float octaDist = _octa(po, 1.0);
+      float octa     = octaDist - 0.01;
+
+      // blob: 정팔면체 쉘(opOnion)을 기저로 Simplex noise displacement 적용
+      //   q:  noise 입력 좌표, freq=1.5, 시간축으로 flow
+      //   domain warp: 접선 방향(ang) 흐름으로 주름에 방향성 부여 (강도 0.22)
+      //   octaShell: opOnion(octa, s=1.0, thickness=0.02) — 정팔면체 표면 근방 쉘
+      //   displacement 진폭: ±0.2 (noise [0,1] → offset 기준 -0.75 적용)
+      float flow  = uTime * 0.18;
+      float ang   = atan(po.z, po.x);
+      vec3  q     = po * 1.5 + flow;
+      q.xz       += vec2(cos(ang + flow), sin(ang + flow)) * 0.22;
+      vec3  w     = q + 0.1*vec3(_vn(q), _vn(q+vec3(5.2,1.3,0.)), _vn(q+vec3(1.7,9.2,0.)));
+
+      // pole 마스크: uPoleDir 방향 꼭짓점 근처 displacement 억제
+      //   dot→1 (pole 방향): mask=0 → blob 없음, 정팔면체 면 노출
+      //   dot→0 (equator):   mask=1 → displacement 최대, 액체 주름
+      //   전환 구간: smoothstep(0.35, 0.65)
+      float poleY    = abs(dot(normalize(po), normalize(uPoleDir)));
+      float poleMask = 1.0 - smoothstep(uDispPoleEdge.x, uDispPoleEdge.y, poleY);
+
+      // 중력 바이어스: 하반구(po.y<0)에 blob 집중
+      //   uDispGravBias.x + uDispGravBias.y * smoothstep(uDispGravEdge.x, uDispGravEdge.y, -y)
+      float gravBias = uDispGravBias.x + uDispGravBias.y * smoothstep(uDispGravEdge.x, uDispGravEdge.y, -normalize(po).y);
+
+      float octaShell = abs(octaDist) - 0.02;  // octaDist 재사용 (_octa 추가 호출 없음)
+      float blob      = octaShell + (_vn(w) - 0.75) * 0.2 * poleMask * gravBias;
+
+      // smooth union k=0.1: 두 표면 경계 10% 범위 내 C1 블렌딩
       return _smin(octa, blob, 0.1);
     }
 
+    // ── [4] 수치 미분 법선 (6-tap central differences) ──
+    //  epsilon=0.004: noise 파장(1/1.5≈0.67)보다 충분히 작아 안정적
     vec3 _normal(vec3 p){
-      const float e=0.004;
+      const float e = 0.004;
       return normalize(vec3(
-        _scene(p+vec3(e,0,0))-_scene(p-vec3(e,0,0)),
-        _scene(p+vec3(0,e,0))-_scene(p-vec3(0,e,0)),
-        _scene(p+vec3(0,0,e))-_scene(p-vec3(0,0,e))));
+        _scene(p+vec3(e,0,0)) - _scene(p-vec3(e,0,0)),
+        _scene(p+vec3(0,e,0)) - _scene(p-vec3(0,e,0)),
+        _scene(p+vec3(0,0,e)) - _scene(p-vec3(0,0,e))));
     }
 
+    // ── [5] 레이마칭 ──────────────────────────────────
+    //  sphere tracing: 120 스텝, step multiplier=0.85 (보수적 전진)
+    //  miss 판정: d > 8.0 (bounding box 대각 ≈ 2.8*√3 ≈ 4.85 이상)
     float _rm(vec3 ro, vec3 rd){
-      float d=0.;
-      for(int i=0;i<120;i++){
-        float s=_scene(ro+rd*d);
-        if(s<0.001||d>8.) break;
-        d+=s*0.85;
+      float d = 0.;
+      for(int i = 0; i < 120; i++){
+        float s = _scene(ro + rd*d);
+        if(s < 0.001 || d > 8.) break;
+        d += s * 0.85;
       }
       return d;
     }
 
-    // ── 환경 반사 (roughness 기반 lobe) ──
+    // ── [6] 절차적 환경 반사 ─────────────────────────
+    //  4광원 방향으로 Phong lobe 합산 (외부 HDR 텍스처 불필요)
+    //  lobe exponent: roughness=0 → e=48~52 (날카로운 반사)
+    //                 roughness=1 → e=3    (확산 반사)
     vec3 envColor(vec3 dir, float rough){
-      float e1=mix(48.,3.,rough*rough), e2=mix(28.,3.,rough*rough);
-      float e3=mix(52.,3.,rough*rough), e4=mix(22.,3.,rough*rough);
-      vec3 c=vec3(0.);
-      c+=uLCol1*pow(max(dot(dir,normalize(uLPos1)),0.),e1)*5.0;
-      c+=uLCol2*pow(max(dot(dir,normalize(uLPos2)),0.),e2)*3.5;
-      c+=uLCol3*pow(max(dot(dir,normalize(uLPos3)),0.),e3)*5.0;
-      c+=uLCol4*pow(max(dot(dir,normalize(uLPos4)),0.),e4)*2.5;
-      c+=mix(vec3(0.01,0.01,0.03),vec3(0.04,0.05,0.09),dir.y*0.5+0.5)*0.5;
+      float e1 = mix(48., 3., rough*rough);
+      float e2 = mix(28., 3., rough*rough);
+      float e3 = mix(52., 3., rough*rough);
+      float e4 = mix(22., 3., rough*rough);
+      vec3 c = vec3(0.);
+      c += uLCol1 * pow(max(dot(dir, normalize(uLPos1)), 0.), e1) * 5.0;
+      c += uLCol2 * pow(max(dot(dir, normalize(uLPos2)), 0.), e2) * 3.5;
+      c += uLCol3 * pow(max(dot(dir, normalize(uLPos3)), 0.), e3) * 5.0;
+      c += uLCol4 * pow(max(dot(dir, normalize(uLPos4)), 0.), e4) * 2.5;
+      // 앰비언트: 하늘(파랑 계열) ↔ 바닥(어두운 파랑) 그라디언트
+      c += mix(vec3(0.01,0.01,0.03), vec3(0.04,0.05,0.09), dir.y*0.5+0.5) * 0.5;
       return c;
     }
 
-    // ── GGX NDF ──
+    // ── [7] PBR 서브함수 ──────────────────────────────
+
+    // GGX NDF: roughness^4 로 확장하여 하이라이트 형태 제어
     float D_GGX(float NdotH, float rough){
-      float a2=rough*rough*rough*rough;
-      float d=NdotH*NdotH*(a2-1.)+1.;
-      return a2/(PI*d*d+0.0001);
+      float a2 = rough*rough*rough*rough;
+      float d  = NdotH*NdotH*(a2-1.) + 1.;
+      return a2 / (PI*d*d + 0.0001);
     }
-    // ── Smith-Schlick Geometry ──
+    // Smith-Schlick 기하 감쇠: k=(roughness+1)²/8 (직접광 기준)
     float G_Smith(float NdotV2, float NdotL, float rough){
-      float k=(rough+1.)*(rough+1.)/8.;
-      float gv=NdotV2/(NdotV2*(1.-k)+k);
-      float gl=NdotL/(NdotL*(1.-k)+k);
-      return gv*gl;
+      float k  = (rough+1.)*(rough+1.) / 8.;
+      float gv = NdotV2 / (NdotV2*(1.-k) + k);
+      float gl = NdotL  / (NdotL *(1.-k) + k);
+      return gv * gl;
     }
-    // ── Dan Bruton 파장→RGB (380~700nm) ──
+    // Dan Bruton 파장→RGB (380~700 nm 가시광 piecewise linear)
     vec3 wl2rgb(float w){
       vec3 c;
-      if     (w<440.) c=vec3(-(w-440.)/(440.-380.),0.,1.);
-      else if(w<490.) c=vec3(0.,(w-440.)/(490.-440.),1.);
-      else if(w<510.) c=vec3(0.,1.,-(w-510.)/(510.-490.));
-      else if(w<580.) c=vec3((w-510.)/(580.-510.),1.,0.);
-      else if(w<645.) c=vec3(1.,-(w-645.)/(645.-580.),0.);
-      else            c=vec3(1.,0.,0.);
-      return clamp(c,0.,1.);
+      if     (w < 440.) c = vec3(-(w-440.)/(440.-380.), 0., 1.);
+      else if(w < 490.) c = vec3(0., (w-440.)/(490.-440.), 1.);
+      else if(w < 510.) c = vec3(0., 1., -(w-510.)/(510.-490.));
+      else if(w < 580.) c = vec3((w-510.)/(580.-510.), 1., 0.);
+      else if(w < 645.) c = vec3(1., -(w-645.)/(645.-580.), 0.);
+      else              c = vec3(1., 0., 0.);
+      return clamp(c, 0., 1.);
     }
-
+    // Schlick Fresnel: r0 = ((1-ior)/(1+ior))²
     float fresnel(vec3 V, vec3 N, float ior){
-      float r0=pow((1.-ior)/(1.+ior),2.);
-      return r0+(1.-r0)*pow(1.-clamp(dot(V,N),0.,1.),5.);
+      float r0 = pow((1.-ior)/(1.+ior), 2.);
+      return r0 + (1.-r0) * pow(1.-clamp(dot(V,N), 0., 1.), 5.);
     }
-
+    // Reinhard 톤맵 + gamma 2.2
     vec3 tonemapGamma(vec3 c){
-      c=c/(c+1.);
-      return pow(c,vec3(1./2.2));
+      c = c / (c + 1.);
+      return pow(c, vec3(1./2.2));
     }
 
+    // ── [8] 메인 셰이딩 ──────────────────────────────
     void main(){
       vec3 ro = vCamObjPos;
       vec3 rd = normalize(vObjPos - vCamObjPos);
@@ -240,32 +366,50 @@ const mat = new THREE.ShaderMaterial({
       bool  hit = d < 8.0;
       if(!hit){ discard; return; }
 
-      // 오브젝트 공간 히트포인트 + 노말
+      // 히트포인트 & 법선
       vec3 p    = ro + rd * d;
       vec3 objN = _normal(p);
 
-      // 월드 공간으로 변환
-      vec3 wPos = (uModelMat * vec4(p, 1.0)).xyz;
-      vec3 N    = normalize(uNormalMat * objN);
-      vec3 V    = normalize(uCamPos - wPos);
+      // 오브젝트 공간 → 월드 공간 변환
+      vec3  wPos  = (uModelMat * vec4(p, 1.0)).xyz;
+      vec3  N     = normalize(uNormalMat * objN);
+      vec3  V     = normalize(uCamPos - wPos);
       float NdotV = clamp(dot(N, V), 0., 1.);
 
-      vec3 albedo = vec3(0.88, 0.91, 0.95);
-      float rough = uRoughness;
-      float F0    = pow((1.-1.45)/(1.+1.45),2.);  // ~0.035
+      vec3  albedo = vec3(0.88, 0.91, 0.95);        // 유리 베이스 색상 (청회색)
+      float rough  = uRoughness;
+      float F0     = pow((1.-1.45)/(1.+1.45), 2.);  // IOR=1.45 유리 기준 ≈ 0.035
 
-      // ── 환경 반사 (roughness 기반) ──
-      vec3 refl     = envColor(reflect(-V, N), rough) * 2.2 * albedo;
-      float fres    = fresnel(V, N, 1.45);
+      // ── [공통 마스크] octaFlatMask: 정팔면체 평면 vs blob 곡면 판별 ────────
+      //
+      //   정팔면체 면 법선 = normalize(±1,±1,±1) → L1-norm = |x|+|y|+|z| = √3 (최대)
+      //   blob 곡면 법선  = 임의 방향           → L1-norm = 0.6~1.0 (분산됨)
+      //   faceAlign: 정팔면체 면 ≈ 1.0, blob 곡면 ≈ 0.6
+      //
+      //   물리 근거: 평행 양면 유리(glass slab)는 두 번의 굴절이 서로 상쇄되어
+      //   순 분산이 발생하지 않음 (이리데슨스·thinFilm·prism 모두 억제)
+      //   반면 비평행 출사면(blob 곡면)은 분산 가시화 → prism 효과 유지
+      float faceAlign    = (abs(objN.x) + abs(objN.y) + abs(objN.z)) / sqrt(3.0);
+      float octaFlatMask = smoothstep(0.70, 0.95, faceAlign);
+      // octaFlatMask ≈ 1.0: 정팔면체 평면 → 무채색 은빛 유리 (억제 최대)
+      // octaFlatMask ≈ 0.0: blob 곡면    → 채도 효과 통과
+
+      // 환경 반사 + thin-film 이리데슨스
+      //   thinFilm: NdotV 기반 cos 3채널 → RGB 무지개 반사 변조
+      //   mix 강도: 0.70 × (1-octaFlatMask) → 정팔면체 평면에서는 무채색 반사
+      //   → 레퍼런스: 정팔면체 면 중앙 = 은빛/흰빛 유리, blob 곡면만 채도
+      vec3  refl = envColor(reflect(-V, N), rough) * 2.2 * albedo;
+      float fres = fresnel(V, N, 1.45);
       vec3  coloredRefl;
       {
-        float filmVar  = NdotV + (_vn((ro+rd*d)*4.5+uTime*0.18)-0.5)*0.35;
-        vec3  thinFilm = 0.5+0.5*cos(filmVar*PI*1.8+vec3(0.,2.094,4.189));
-        coloredRefl    = refl * mix(vec3(1.0), thinFilm*1.6, 0.75);
+        float filmVar      = NdotV;
+        vec3  thinFilm     = 0.5 + 0.5*cos(filmVar*PI*2.5 + vec3(0., 2.094, 4.189));
+        float filmStrength = 0.70 * (1.0 - octaFlatMask);
+        coloredRefl        = refl * mix(vec3(1.0), thinFilm*1.6, filmStrength);
       }
       vec3 base = coloredRefl * mix(0.5, 1.0, fres);
 
-      // ── GGX Cook-Torrance 스펙큘러 4광원 ──
+      // GGX Cook-Torrance 스펙큘러 (4광원)
       vec3 spec = vec3(0.);
       vec3 lightDirs[4];
       vec3 lightCols[4];
@@ -273,58 +417,134 @@ const mat = new THREE.ShaderMaterial({
       lightDirs[1]=normalize(uLPos2-wPos); lightCols[1]=uLCol2;
       lightDirs[2]=normalize(uLPos3-wPos); lightCols[2]=uLCol3;
       lightDirs[3]=normalize(uLPos4-wPos); lightCols[3]=uLCol4;
-      for(int i=0;i<4;i++){
+      for(int i = 0; i < 4; i++){
         vec3  L     = lightDirs[i];
-        vec3  H     = normalize(L+V);
-        float NdotL = max(dot(N,L),0.);
-        float NdotH = max(dot(N,H),0.);
-        float VdotH = max(dot(V,H),0.);
+        vec3  H     = normalize(L + V);
+        float NdotL = max(dot(N, L), 0.);
+        float NdotH = max(dot(N, H), 0.);
+        float VdotH = max(dot(V, H), 0.);
         float D     = D_GGX(NdotH, rough);
         float G     = G_Smith(NdotV, NdotL, rough);
-        vec3  F     = vec3(F0)+(1.-F0)*pow(1.-VdotH,5.);
-        spec       += lightCols[i] * (D*G*F/(4.*NdotV*NdotL+0.001)) * NdotL * 2.5;
+        vec3  F     = vec3(F0) + (1.-F0)*pow(1.-VdotH, 5.);
+        spec       += lightCols[i] * (D*G*F / (4.*NdotV*NdotL + 0.001)) * NdotL * 2.5;
       }
 
-      // ── 스펙트럼 분산 (Dan Bruton 8파장 샘플) ──
+      // 스펙트럼 분산 — Cauchy 방정식 + Dan Bruton 8파장 샘플
+      //   curveMask = (1-octaFlatMask): blob 곡면에서만 분산 가시화
+      //   물리 근거: 비평행 출사면(blob 곡면)만 파장별 굴절각 차이 유지
+      //             정팔면체 평행면은 분산이 내부에서 상쇄 → 무채색 스펙큘러만
+      float curveMask = 1.0 - octaFlatMask;
       vec3 prism = vec3(0.);
-      vec3 Ld1=lightDirs[0], Ld3=lightDirs[2];
-      for(int i=0;i<8;i++){
-        float wl  = mix(400.,700.,float(i)/7.);
-        float ior = 1.45 + 0.0035/(wl*wl*0.000001);
+      vec3 Ld1 = lightDirs[0], Ld3 = lightDirs[2];
+      for(int i = 0; i < 8; i++){
+        float wl  = mix(400., 700., float(i)/7.);
+        float ior = 1.45 + uPrismDisp/(wl*wl*0.000001);
         float sh  = mix(800., 200., rough);
-        float s1  = pow(max(dot(N,normalize(Ld1*ior+V)),0.),sh);
-        float s3  = pow(max(dot(N,normalize(Ld3*ior+V)),0.),sh);
-        prism    += wl2rgb(wl) * (s1+s3);
+        float s1  = pow(max(dot(N, normalize(Ld1*ior + V)), 0.), sh);
+        float s3  = pow(max(dot(N, normalize(Ld3*ior + V)), 0.), sh);
+        prism    += wl2rgb(wl) * (s1 + s3);
       }
       prism /= 8.0;
 
-      // ── 림 + 이리데슨스 엣지 ──
-      vec3 rim      = pow(1.-NdotV,3.2)*vec3(0.70,0.90,1.00)*0.8;
-      float iridM   = pow(1.-NdotV,3.8);
-      vec3  irid    = (0.5+0.5*cos((1.-NdotV)*PI*6.5+vec3(0.,2.094,4.189)))*iridM*0.7;
+      // 림 라이팅: 엣지에서 은빛 실루엣 강조 (pow 3.2 → 좁은 그라디언트)
+      vec3 rim = pow(1.-NdotV, 3.2) * vec3(0.70, 0.90, 1.00) * 0.8;
 
-      // ── Alpha: FresnelSchlickRoughness ──
-      float NdotV_a  = clamp(-dot(rd,objN),0.,1.);
+      // 이리데슨스
+      //   (1-octaFlatMask): 정팔면체 평면에서는 irid 제거 → 무채색 유리면
+      //   blob 곡면(octaFlatMask≈0)에서만 무지개 글로우 유지
+      float iridM = pow(1.-NdotV, uIridExp) * (1.0 - octaFlatMask);
+      vec3  irid  = (0.5 + 0.5*cos((1.-NdotV)*PI*5.0 + vec3(0., 2.094, 4.189))) * iridM * uIridStr;
+
+      // ── [앞면] Semi-emissive: blob 영역 자발광 ────────────────────────────
+      //   semiMask = blobMask (NdotV 의존성 제거)
+      //   물리 근거: 자발광 물체는 관측 각도와 무관하게 균일하게 방출
+      //             정면(NdotV=1)에서도 억제 없이 강채도 유지 → 레퍼런스 blob 특성
+      vec3  po_shade   = rotX(uTime*0.06) * rotY(-uTime*0.11) * p;
+      float poleY_s    = abs(dot(normalize(po_shade), normalize(uPoleDir)));
+      float poleMask_s = 1.0 - smoothstep(uEmissPoleEdge.x, uEmissPoleEdge.y, poleY_s);
+      float gravBias_s = uEmissGravBias.x + uEmissGravBias.y * smoothstep(uEmissGravEdge.x, uEmissGravEdge.y, -normalize(po_shade).y);
+      float blobMask   = poleMask_s * gravBias_s;
+
+      float longitude  = atan(po_shade.z, po_shade.x) / (2.0*PI) + 0.5;
+      vec3  semiRainbow = wl2rgb(mix(380., 700., longitude));
+      float semiMask    = blobMask;                              // NdotV 억제 제거
+      vec3  semiEmiss   = semiRainbow * semiMask * uSemiEmissStr;
+
+      // ── [2차 히트] 내부 고정 스텝 마칭 → 탈출점 + 두께 기반 투과 ────────
+      //
+      //   배경: SDF 내부(음수 영역)에서는 sphere tracing의 안전 거리가 보장되지 않음
+      //         → 고정 스텝(0.035) 48회로 탈출점 탐색 (최대 1.68 단위)
+      //         오브젝트 직경 ≈ 2.4 최대이나 대부분 시선 각도에서 1.68 이내
+      //
+      //   Beer-Lambert 투과율:
+      //     transmission = exp(-thickness × absorb)
+      //     absorb=0.75: 두께 1.0에서 약 57% 감쇠
+      //     → 정면(두꺼운 단면): 낮은 투과 → 뒤가 희미
+      //     → 엣지(얇은 단면): 높은 투과 → blob 색 더 선명하게 투과
+      //
+      //   탈출점 p2에서 blob semiEmiss 재평가:
+      //     p2_pert: roughness 기반 앞면 법선(반전) 방향 편차 → 흐릿한 투과 근사
+      //     backN_approx = -objN: 앞면 법선 반전 (추가 _normal() 6-tap 생략)
+      //     po2, blobMask2, lon2: 앞면과 동일한 공간 기준 → 표면 패턴 연속성 유지
+      float d2 = d + 0.02;
+      for(int i = 0; i < 48; i++){
+        if(_scene(ro + rd * d2) > 0.001) break;
+        d2 += 0.035;
+      }
+      float thickness    = d2 - d;
+      float transmission = exp(-thickness * 0.55);
+
+      vec3  backN_approx = -objN;
+      vec3  p2_pert      = (ro + rd * d2) + backN_approx * rough * 0.12;
+      vec3  po2          = rotX(uTime*0.06) * rotY(-uTime*0.11) * p2_pert;
+      float poleY2       = abs(dot(normalize(po2), normalize(uPoleDir)));
+      float poleMask2    = 1.0 - smoothstep(uEmissPoleEdge.x, uEmissPoleEdge.y, poleY2);
+      float gravBias2    = uEmissGravBias.x + uEmissGravBias.y * smoothstep(uEmissGravEdge.x, uEmissGravEdge.y, -normalize(po2).y);
+      float blobMask2    = poleMask2 * gravBias2;
+      float lon2         = atan(po2.z, po2.x) / (2.0*PI) + 0.5;
+      vec3  backEmiss    = wl2rgb(mix(380., 700., lon2)) * blobMask2 * uSemiEmissStr;
+      vec3  transmitted  = backEmiss * transmission;
+
+      // Alpha — FresnelSchlickRoughness
+      //   roughness=0: 순수 Fresnel (엣지 불투명, 중앙 투명)
+      //   roughness=1: 균일 불투명 (서리 유리)
+      //   uTransp:     전체 불투명도 오버라이드 (0~1)
+      float NdotV_a  = clamp(-dot(rd, objN), 0., 1.);
       float maxFr    = max(1.-rough, F0);
-      float fresnelR = F0+(maxFr-F0)*pow(1.-NdotV_a,5.);
-      float alpha    = mix(mix(fresnelR,1.,rough), 1., uTransp);
+      float fresnelR = F0 + (maxFr-F0) * pow(1.-NdotV_a, 5.);
+      float alpha    = mix(mix(fresnelR, 1., rough), 1., uTransp);
 
-      // ── Premultiplied alpha 출력 ──
-      vec3 diffCol = tonemapGamma(base + irid + rim);
-      vec3 specCol = tonemapGamma(spec + prism*3.0);
-      gl_FragColor = vec4(diffCol*alpha + specCol, alpha);
+      // 출력 채널 분리
+      //   diffCol:  반사/산란 (alpha 가중치 → 유리 투명도 표현)
+      //   emissCol: 자발광 (alpha 독립 → 관측 각도/투명도 무관하게 방출)
+      //             물리 근거: 발광 물체의 방출광은 매질 반사율과 독립적
+      //             semiEmiss + transmitted 모두 alpha 밖으로 → 정면에서도 강채도 유지
+      //   specCol:  GGX 스펙큘러 + prism (curveMask: blob 곡면만 분산)
+      //
+      //   주의: uSemiEmissStr 낮춰서 재조정 권장 (기존 6.5 → 1.5~2.5)
+      vec3 diffCol  = tonemapGamma(base + irid + rim);
+      vec3 emissCol = tonemapGamma(semiEmiss + transmitted);
+      vec3 specCol  = tonemapGamma(spec + prism * uPrismStr * curveMask);
+      gl_FragColor  = vec4(diffCol*alpha + specCol + emissCol, alpha);
     }
   `,
 });
 
-const mesh = new THREE.Mesh(new THREE.BoxGeometry(2.8,2.8,2.8), mat);
+// ═══════════════════════════════════════════════════════
+//  MESH  —  BoxGeometry가 레이마칭 bounding volume 역할
+//  크기 2.8: 정팔면체(s=1.0) + blob 쉘이 완전히 포함되는 최소 박스
+// ═══════════════════════════════════════════════════════
+const mesh = new THREE.Mesh(new THREE.BoxGeometry(2.8, 2.8, 2.8), mat);
 mesh.frustumCulled = false;
 scene.add(mesh);
 
-let t=0;
+// ═══════════════════════════════════════════════════════
+//  RENDER LOOP
+// ═══════════════════════════════════════════════════════
+let t = 0;
 (function animate(){
   requestAnimationFrame(animate);
-  t+=0.016;
+  t += 0.016;
   mesh.updateMatrixWorld();
   uMatWorldInv.value.copy(mesh.matrixWorld).invert();
   uModelMat.value.copy(mesh.matrixWorld);
@@ -333,10 +553,10 @@ let t=0;
   renderer.render(scene, camera);
 })();
 
-window.addEventListener('resize',()=>{
-  camera.aspect=innerWidth/innerHeight;
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth,innerHeight);
+  renderer.setSize(innerWidth, innerHeight);
 });
 </script>
 </body>
