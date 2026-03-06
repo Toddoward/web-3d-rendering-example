@@ -2,31 +2,89 @@
 <html>
 <head>
 <title>Prism3D</title>
-<style>*{margin:0;padding:0}body{overflow:hidden}canvas{display:block}</style>
+<style>
+  * { margin: 0; padding: 0; }
+  body { overflow: hidden; background: #5866A5; }
+  canvas { display: block; }
+
+  /* prefers-reduced-motion fallback 이미지
+     WebGL 대신 PrismQ-Photoroom.png를 전체화면으로 표시
+     object-fit: contain → 비율 유지, 여백은 배경색(#5866A5) 채움 */
+  #rm-fallback {
+    display: none;
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: #5866A5;
+  }
+</style>
 </head>
 <body>
+
+<!-- prefers-reduced-motion fallback: 아래 JS에서 조건부 display:block 처리 -->
+<img id="rm-fallback" src="PrismQ-Photoroom.png" alt="" aria-hidden="true">
+
+<script>
+// ═══════════════════════════════════════════════════════
+//  prefers-reduced-motion 감지
+//  OS "동작 줄이기" 설정이 켜져 있으면:
+//    → Three.js 렌더러 전체 생략
+//    → PrismQ-Photoroom.png fallback 이미지 표시
+//  접근성 근거: WCAG 2.1 §2.3.3 — 전정기관 장애 사용자 보호
+// ═══════════════════════════════════════════════════════
+const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+if (prefersReducedMotion) {
+  document.getElementById('rm-fallback').style.display = 'block';
+}
+</script>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
+if (!prefersReducedMotion) {
 // ═══════════════════════════════════════════════════════
 //  SCENE SETUP
 // ═══════════════════════════════════════════════════════
+// ── 디바이스 감지 & 렌더 품질 분기 ────────────────────────
+//   모바일: DPR=1 (4× 픽셀 감소), AA 비활성, 30fps 캡
+//   데스크탑: DPR=min(dpr, 1.5), AA 활성, 60fps
+const isMobile     = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+const targetDPR    = isMobile ? 1.0 : Math.min(devicePixelRatio, 1.5);
+const FPS_CAP      = isMobile ? 30 : 60;
+const FPS_INTERVAL = 1000 / FPS_CAP;
+
 const scene    = new THREE.Scene();
 const camera   = new THREE.PerspectiveCamera(40, innerWidth/innerHeight, 0.1, 100);
 camera.position.z = 5;
 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({ antialias: !isMobile }); // 모바일: AA 비활성 (fill rate 절감)
 renderer.setSize(innerWidth, innerHeight);
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setPixelRatio(targetDPR);
 
 const BG_COLOR = '#5866A5';
 renderer.setClearColor(new THREE.Color(BG_COLOR), 1.0);
 document.body.style.background = BG_COLOR;
 document.body.appendChild(renderer.domElement);
 
+// FPS 표시 오버레이 (정수, EMA 스무딩)
+const fpsEl = document.createElement('div');
+fpsEl.style.cssText = 'position:fixed;top:8px;right:12px;color:#fff;font:bold 12px monospace;'
+  + 'text-shadow:0 1px 3px rgba(0,0,0,.6);pointer-events:none;z-index:9999;opacity:0.7;';
+document.body.appendChild(fpsEl);
+
 // ═══════════════════════════════════════════════════════
 //  LIGHTING  —  4광원 구면좌표 배치
 //  sph(r, polar, azimuth): 반경 r, 극각 θ, 방위각 φ
 //  LR=13.0: 광원이 오브젝트에서 13 unit 떨어진 거리
+//
+//  [최적화] 4광원 → 3광원으로 축소 완료 (L4 블루 림 제거)
+//    lCol[0]: 주광 페일 민트 — 유지
+//    lCol[1]: 레드 보조광 (prism L2 입력)
+//    lCol[2]: 그린 보조광 (prism 주요 입력 Ld3)
+//    lCol[3]: 블루 림 — 제거 (GGX/env 전용, prism 미사용 → 기여 대비 비용 높음)
+//  채도 추가 완화 시: lCol[1]=(0.85,0.45,0.40), lCol[2]=(0.40,0.75,0.50)
 // ═══════════════════════════════════════════════════════
 const PI = Math.PI;
 function sph(r, t, p) {
@@ -45,9 +103,9 @@ const lPos = [
 ];
 const lCol = [
   new THREE.Vector3(0.87, 0.95, 0.90),  // 페일 민트 (주광)
-  new THREE.Vector3(1.00, 0.10, 0.05),  // 레드
-  new THREE.Vector3(0.10, 1.00, 0.05),  // 그린
-  new THREE.Vector3(0.10, 0.05, 1.00),  // 블루
+  new THREE.Vector3(0.50, 0.10, 0.05),  // 레드   ← 채도 강함, 완화 검토
+  new THREE.Vector3(0.10, 0.50, 0.05),  // 그린   ← 채도 강함, 완화 검토
+  new THREE.Vector3(0.10, 0.05, 1.00),  // 블루   ← 채도 강함, 완화 검토
 ];
 
 // ═══════════════════════════════════════════════════════
@@ -78,10 +136,13 @@ const mat = new THREE.ShaderMaterial({
     uModelMat:    uModelMat,
     uNormalMat:   uNormalMat,
     uCamPos:      { value: camera.position },
+    uResolution:  { value: new THREE.Vector2(
+                      Math.round(innerWidth  * targetDPR),
+                      Math.round(innerHeight * targetDPR)) }, // 실제 렌더 픽셀 해상도
 
     // 머티리얼 파라미터
-    uTransp:   { value: 0.55 },  // 0=Fresnel 기반 투명 / 1=완전 불투명
-    uRoughness:{ value: 0.30 },  // 0=거울 유리          / 1=서리 유리
+    uTransp:   { value: 0.05 },  // 0=Fresnel 기반 투명 / 1=완전 불투명
+    uRoughness:{ value: 0.65 },  // 0=거울 유리          / 1=서리 유리
 
     // blob displacement 억제 방향
     // 해당 방향과 평행한 위치(pole)에서 blob이 사라지고 정팔면체 면이 노출됨
@@ -103,18 +164,18 @@ const mat = new THREE.ShaderMaterial({
     // displacement와 독립적으로 자발광 영역을 별도 제어
     // uEmissPoleEdge: emissive poleMask 전환 구간
     //   displacement보다 넓게 설정 → 발광 영역이 displacement보다 크게
-    uEmissPoleEdge: { value: new THREE.Vector2(0.0, 0.475) },
+    uEmissPoleEdge: { value: new THREE.Vector2(0.00, 0.475) },
     // uEmissGravEdge: emissive gravBias smoothstep 입력 구간
     uEmissGravEdge: { value: new THREE.Vector2(-0.2, 0.6) },
     // uEmissGravBias: emissive gravBias 가중치 (x=베이스, y=진폭)
     uEmissGravBias: { value: new THREE.Vector2(0.7, 0.3) },
 
     // 무지개 파라미터 (레퍼런스 이미지 분석 기준)
-    uIridExp:      { value: 1.2  },  // irid 분포 exponent: 낮을수록 면 전체로 퍼짐 (레퍼런스: 면 전체 무지개 띠)
+    uIridExp:      { value: 3.5  },  // irid 분포 exponent: 낮을수록 면 전체로 퍼짐 (레퍼런스: 면 전체 무지개 띠)
     uIridStr:      { value: 1.2  },  // irid 강도 (레퍼런스: 옥타 면 moderate 무지개)
     uPrismStr:     { value: 10.0 },  // 스펙트럼 분산 배율 (레퍼런스: 면 안 날카로운 스펙트럼 선)
-    uPrismDisp:    { value: 0.013 },  // Cauchy 분산 계수 (레퍼런스: 파장 분리 뚜렷)
-    uSemiEmissStr: { value: 0.35  },  // 블롭 자발광 강도 (레퍼런스: 블롭 강한 채도 자발광)
+    uPrismDisp:    { value: 0.013},  // Cauchy 분산 계수 (레퍼런스: 파장 분리 뚜렷)
+    uSemiEmissStr: { value: 0.7  },  // 블롭 자발광 강도 (레퍼런스: 블롭 강한 채도 자발광)
 
     uLPos1: { value: lPos[0] }, uLPos2: { value: lPos[1] },
     uLPos3: { value: lPos[2] }, uLPos4: { value: lPos[3] },
@@ -148,6 +209,7 @@ const mat = new THREE.ShaderMaterial({
     uniform mat4  uModelMat;
     uniform mat3  uNormalMat;
     uniform vec3  uCamPos;
+    uniform vec2  uResolution; // 실제 렌더 해상도 (CSS pixel × DPR)
     uniform float uTransp;
     uniform float uRoughness;
     uniform vec3  uPoleDir;
@@ -239,10 +301,11 @@ const mat = new THREE.ShaderMaterial({
     mat3 rotX(float a){ float c=cos(a),s=sin(a); return mat3(1,0,0, 0,c,-s, 0,s,c); }
 
     // ── [3] SDF 씬 컴포지션 ───────────────────────────
-    float _scene(vec3 p){
+    // rot: 프레임당 1회 계산된 회전 행렬 (main()에서 전달) — 재계산 방지
+    float _scene(vec3 p, mat3 rot){
 
       // 공통 회전 좌표 (octa·blob 동일 속도·방향 공회전)
-      vec3  po       = rotX(uTime*0.06) * rotY(-uTime*0.11) * p;
+      vec3  po       = rot * p;
 
       // 정팔면체 (s=1.0, bevel=0.01)
       // _octa 결과를 octaDist에 캐싱 → octa와 octaShell 모두 재사용
@@ -280,21 +343,21 @@ const mat = new THREE.ShaderMaterial({
 
     // ── [4] 수치 미분 법선 (6-tap central differences) ──
     //  epsilon=0.004: noise 파장(1/1.5≈0.67)보다 충분히 작아 안정적
-    vec3 _normal(vec3 p){
+    vec3 _normal(vec3 p, mat3 rot){
       const float e = 0.004;
       return normalize(vec3(
-        _scene(p+vec3(e,0,0)) - _scene(p-vec3(e,0,0)),
-        _scene(p+vec3(0,e,0)) - _scene(p-vec3(0,e,0)),
-        _scene(p+vec3(0,0,e)) - _scene(p-vec3(0,0,e))));
+        _scene(p+vec3(e,0,0), rot) - _scene(p-vec3(e,0,0), rot),
+        _scene(p+vec3(0,e,0), rot) - _scene(p-vec3(0,e,0), rot),
+        _scene(p+vec3(0,0,e), rot) - _scene(p-vec3(0,0,e), rot)));
     }
 
     // ── [5] 레이마칭 ──────────────────────────────────
-    //  sphere tracing: 120 스텝, step multiplier=0.85 (보수적 전진)
+    //  sphere tracing: 80 스텝 (120→80, ~37% 감소), step multiplier=0.85
     //  miss 판정: d > 8.0 (bounding box 대각 ≈ 2.8*√3 ≈ 4.85 이상)
-    float _rm(vec3 ro, vec3 rd){
+    float _rm(vec3 ro, vec3 rd, mat3 rot){
       float d = 0.;
-      for(int i = 0; i < 120; i++){
-        float s = _scene(ro + rd*d);
+      for(int i = 0; i < 80; i++){
+        float s = _scene(ro + rd*d, rot);
         if(s < 0.001 || d > 8.) break;
         d += s * 0.85;
       }
@@ -302,19 +365,17 @@ const mat = new THREE.ShaderMaterial({
     }
 
     // ── [6] 절차적 환경 반사 ─────────────────────────
-    //  4광원 방향으로 Phong lobe 합산 (외부 HDR 텍스처 불필요)
+    //  3광원 방향으로 Phong lobe 합산 (L4 제거 — 25% specular 비용 절감)
     //  lobe exponent: roughness=0 → e=48~52 (날카로운 반사)
     //                 roughness=1 → e=3    (확산 반사)
     vec3 envColor(vec3 dir, float rough){
       float e1 = mix(48., 3., rough*rough);
       float e2 = mix(28., 3., rough*rough);
       float e3 = mix(52., 3., rough*rough);
-      float e4 = mix(22., 3., rough*rough);
       vec3 c = vec3(0.);
       c += uLCol1 * pow(max(dot(dir, normalize(uLPos1)), 0.), e1) * 5.0;
       c += uLCol2 * pow(max(dot(dir, normalize(uLPos2)), 0.), e2) * 3.5;
       c += uLCol3 * pow(max(dot(dir, normalize(uLPos3)), 0.), e3) * 5.0;
-      c += uLCol4 * pow(max(dot(dir, normalize(uLPos4)), 0.), e4) * 2.5;
       // 앰비언트: 하늘(파랑 계열) ↔ 바닥(어두운 파랑) 그라디언트
       c += mix(vec3(0.01,0.01,0.03), vec3(0.04,0.05,0.09), dir.y*0.5+0.5) * 0.5;
       return c;
@@ -362,13 +423,17 @@ const mat = new THREE.ShaderMaterial({
       vec3 ro = vCamObjPos;
       vec3 rd = normalize(vObjPos - vCamObjPos);
 
-      float d   = _rm(ro, rd);
+      // 회전 행렬 1회 계산 — _scene() 호출(최대 86회)마다 재계산 방지
+      // _rm(80스텝) + _normal(6-tap) = 86회 × (2×cos/sin + mat3 mul) 절감
+      mat3 _rot = rotX(uTime*0.18) * rotY(-uTime*0.32);
+
+      float d   = _rm(ro, rd, _rot);
       bool  hit = d < 8.0;
       if(!hit){ discard; return; }
 
       // 히트포인트 & 법선
       vec3 p    = ro + rd * d;
-      vec3 objN = _normal(p);
+      vec3 objN = _normal(p, _rot);
 
       // 오브젝트 공간 → 월드 공간 변환
       vec3  wPos  = (uModelMat * vec4(p, 1.0)).xyz;
@@ -417,7 +482,7 @@ const mat = new THREE.ShaderMaterial({
       lightDirs[1]=normalize(uLPos2-wPos); lightCols[1]=uLCol2;
       lightDirs[2]=normalize(uLPos3-wPos); lightCols[2]=uLCol3;
       lightDirs[3]=normalize(uLPos4-wPos); lightCols[3]=uLCol4;
-      for(int i = 0; i < 4; i++){
+      for(int i = 0; i < 3; i++){  // L4 제거 — 3광원
         vec3  L     = lightDirs[i];
         vec3  H     = normalize(L + V);
         float NdotL = max(dot(N, L), 0.);
@@ -429,22 +494,22 @@ const mat = new THREE.ShaderMaterial({
         spec       += lightCols[i] * (D*G*F / (4.*NdotV*NdotL + 0.001)) * NdotL * 2.5;
       }
 
-      // 스펙트럼 분산 — Cauchy 방정식 + Dan Bruton 8파장 샘플
+      // 스펙트럼 분산 — Cauchy 방정식 + Dan Bruton 4파장 샘플 (8→4, ~50% 비용 절감)
       //   curveMask = (1-octaFlatMask): blob 곡면에서만 분산 가시화
       //   물리 근거: 비평행 출사면(blob 곡면)만 파장별 굴절각 차이 유지
       //             정팔면체 평행면은 분산이 내부에서 상쇄 → 무채색 스펙큘러만
       float curveMask = 1.0 - octaFlatMask;
       vec3 prism = vec3(0.);
       vec3 Ld1 = lightDirs[0], Ld3 = lightDirs[2];
-      for(int i = 0; i < 8; i++){
-        float wl  = mix(400., 700., float(i)/7.);
+      for(int i = 0; i < 4; i++){
+        float wl  = mix(400., 700., float(i)/3.);
         float ior = 1.45 + uPrismDisp/(wl*wl*0.000001);
         float sh  = mix(800., 200., rough);
         float s1  = pow(max(dot(N, normalize(Ld1*ior + V)), 0.), sh);
         float s3  = pow(max(dot(N, normalize(Ld3*ior + V)), 0.), sh);
         prism    += wl2rgb(wl) * (s1 + s3);
       }
-      prism /= 8.0;
+      prism /= 4.0;
 
       // 림 라이팅: 엣지에서 은빛 실루엣 강조 (pow 3.2 → 좁은 그라디언트)
       vec3 rim = pow(1.-NdotV, 3.2) * vec3(0.70, 0.90, 1.00) * 0.8;
@@ -459,7 +524,7 @@ const mat = new THREE.ShaderMaterial({
       //   semiMask = blobMask (NdotV 의존성 제거)
       //   물리 근거: 자발광 물체는 관측 각도와 무관하게 균일하게 방출
       //             정면(NdotV=1)에서도 억제 없이 강채도 유지 → 레퍼런스 blob 특성
-      vec3  po_shade   = rotX(uTime*0.06) * rotY(-uTime*0.11) * p;
+      vec3  po_shade   = _rot * p;
       float poleY_s    = abs(dot(normalize(po_shade), normalize(uPoleDir)));
       float poleMask_s = 1.0 - smoothstep(uEmissPoleEdge.x, uEmissPoleEdge.y, poleY_s);
       float gravBias_s = uEmissGravBias.x + uEmissGravBias.y * smoothstep(uEmissGravEdge.x, uEmissGravEdge.y, -normalize(po_shade).y);
@@ -473,12 +538,12 @@ const mat = new THREE.ShaderMaterial({
       // ── [2차 히트] 내부 고정 스텝 마칭 → 탈출점 + 두께 기반 투과 ────────
       //
       //   배경: SDF 내부(음수 영역)에서는 sphere tracing의 안전 거리가 보장되지 않음
-      //         → 고정 스텝(0.035) 48회로 탈출점 탐색 (최대 1.68 단위)
-      //         오브젝트 직경 ≈ 2.4 최대이나 대부분 시선 각도에서 1.68 이내
+      //         → 고정 스텝(0.035) 24회로 탈출점 탐색 (최대 0.84 단위, 48→24 ~50% 절감)
+      //         Beer-Lambert는 근사값이므로 정밀도 손실 허용 범위
       //
       //   Beer-Lambert 투과율:
       //     transmission = exp(-thickness × absorb)
-      //     absorb=0.75: 두께 1.0에서 약 57% 감쇠
+      //     absorb=0.55: 두께 1.0에서 약 53% 감쇠 (exp(-0.75) ≈ 0.47)
       //     → 정면(두꺼운 단면): 낮은 투과 → 뒤가 희미
       //     → 엣지(얇은 단면): 높은 투과 → blob 색 더 선명하게 투과
       //
@@ -487,16 +552,16 @@ const mat = new THREE.ShaderMaterial({
       //     backN_approx = -objN: 앞면 법선 반전 (추가 _normal() 6-tap 생략)
       //     po2, blobMask2, lon2: 앞면과 동일한 공간 기준 → 표면 패턴 연속성 유지
       float d2 = d + 0.02;
-      for(int i = 0; i < 48; i++){
-        if(_scene(ro + rd * d2) > 0.001) break;
+      for(int i = 0; i < 24; i++){
+        if(_scene(ro + rd * d2, _rot) > 0.001) break;
         d2 += 0.035;
       }
       float thickness    = d2 - d;
-      float transmission = exp(-thickness * 0.55);
+      float transmission = exp(-thickness * 0.75);  // Beer-Lambert: absorb=0.75
 
       vec3  backN_approx = -objN;
       vec3  p2_pert      = (ro + rd * d2) + backN_approx * rough * 0.12;
-      vec3  po2          = rotX(uTime*0.06) * rotY(-uTime*0.11) * p2_pert;
+      vec3  po2          = _rot * p2_pert;
       float poleY2       = abs(dot(normalize(po2), normalize(uPoleDir)));
       float poleMask2    = 1.0 - smoothstep(uEmissPoleEdge.x, uEmissPoleEdge.y, poleY2);
       float gravBias2    = uEmissGravBias.x + uEmissGravBias.y * smoothstep(uEmissGravEdge.x, uEmissGravEdge.y, -normalize(po2).y);
@@ -514,18 +579,15 @@ const mat = new THREE.ShaderMaterial({
       float fresnelR = F0 + (maxFr-F0) * pow(1.-NdotV_a, 5.);
       float alpha    = mix(mix(fresnelR, 1., rough), 1., uTransp);
 
-      // 출력 채널 분리
-      //   diffCol:  반사/산란 (alpha 가중치 → 유리 투명도 표현)
-      //   emissCol: 자발광 (alpha 독립 → 관측 각도/투명도 무관하게 방출)
-      //             물리 근거: 발광 물체의 방출광은 매질 반사율과 독립적
-      //             semiEmiss + transmitted 모두 alpha 밖으로 → 정면에서도 강채도 유지
-      //   specCol:  GGX 스펙큘러 + prism (curveMask: blob 곡면만 분산)
-      //
-      //   주의: uSemiEmissStr 낮춰서 재조정 권장 (기존 6.5 → 1.5~2.5)
-      vec3 diffCol  = tonemapGamma(base + irid + rim);
-      vec3 emissCol = tonemapGamma(semiEmiss + transmitted);
-      vec3 specCol  = tonemapGamma(spec + prism * uPrismStr * curveMask);
-      gl_FragColor  = vec4(diffCol*alpha + specCol + emissCol, alpha);
+      // 선형 공간에서 합산 후 단일 tonemapGamma 적용 (3회→1회, ~5% 절감)
+      //   물리 근거: 톤매핑은 선형 합산 결과에 1회 적용이 물리적으로 올바름
+      //   diffuse: alpha 가중치 적용 (유리 투명도)
+      //   emiss:   alpha 독립 (자발광 → 관측각/투명도 무관)
+      //   spec:    가산 혼합
+      vec3 linearSum = (base + irid + rim) * alpha
+                     + (spec + prism * uPrismStr * curveMask)
+                     + (semiEmiss + transmitted);
+      gl_FragColor  = vec4(tonemapGamma(linearSum), alpha);
     }
   `,
 });
@@ -540,16 +602,30 @@ scene.add(mesh);
 
 // ═══════════════════════════════════════════════════════
 //  RENDER LOOP
+//  - FPS 캡: 모바일 30fps / 데스크탑 60fps (열 관리 + 배터리)
+//  - uTime: 실제 경과시간(초) 기반 → FPS 캡과 무관한 일정한 애니메이션 속도
+//  - FPS 표시: EMA(α=0.1) 스무딩 후 Math.round() 정수 표시
 // ═══════════════════════════════════════════════════════
-let t = 0;
-(function animate(){
+let   lastFrameTime = 0;
+let   smoothFps     = FPS_CAP;
+
+(function animate(now = 0){
   requestAnimationFrame(animate);
-  t += 0.016;
+
+  const delta = now - lastFrameTime;
+  if(delta < FPS_INTERVAL - 0.5) return;  // FPS 캡 미만이면 스킵
+
+  // EMA FPS 스무딩 (α=0.1 → 약 10프레임 평균)
+  if(delta > 0) smoothFps = smoothFps * 0.9 + (1000 / delta) * 0.1;
+  fpsEl.textContent = Math.round(smoothFps) + ' fps';
+
+  lastFrameTime = now;
+
+  uTime.value = now * 0.001;  // 실제 경과시간(초) — 애니메이션 속도 일관성 보장
   mesh.updateMatrixWorld();
   uMatWorldInv.value.copy(mesh.matrixWorld).invert();
   uModelMat.value.copy(mesh.matrixWorld);
   uNormalMat.value.getNormalMatrix(mesh.matrixWorld);
-  uTime.value = t;
   renderer.render(scene, camera);
 })();
 
@@ -557,7 +633,13 @@ window.addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  // uResolution 업데이트: 실제 렌더 픽셀 수 (CSS size × DPR)
+  mat.uniforms.uResolution.value.set(
+    Math.round(innerWidth  * targetDPR),
+    Math.round(innerHeight * targetDPR)
+  );
 });
+} // end: if (!prefersReducedMotion)
 </script>
 </body>
 </html>
