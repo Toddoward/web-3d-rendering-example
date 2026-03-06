@@ -3,13 +3,16 @@
 <head>
 <title>Prism3D</title>
 <style>
+  /* BG_COLOR 단일 출처: JS const BG_COLOR → --bg-color CSS 변수로 주입
+     :root의 초기값은 JS 로드 전 흰 배경 방지용 fallback */
+  :root { --bg-color: #000000; }
   * { margin: 0; padding: 0; }
-  body { overflow: hidden; background: #5866A5; }
+  body { overflow: hidden; background: var(--bg-color); }
   canvas { display: block; }
 
   /* prefers-reduced-motion fallback 이미지
      WebGL 대신 PrismQ-Photoroom.png를 전체화면으로 표시
-     object-fit: contain → 비율 유지, 여백은 배경색(#5866A5) 채움 */
+     object-fit: contain → 비율 유지, 여백은 배경색(--bg-color) 채움 */
   #rm-fallback {
     display: none;
     position: fixed;
@@ -17,7 +20,7 @@
     width: 100%;
     height: 100%;
     object-fit: contain;
-    background: #5866A5;
+    background: var(--bg-color);
   }
 </style>
 </head>
@@ -63,7 +66,8 @@ const renderer = new THREE.WebGLRenderer({ antialias: !isMobile }); // 모바일
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(targetDPR);
 
-const BG_COLOR = '#5866A5';
+const BG_COLOR = '#000000';  // ← 색상 변경 시 이 한 곳만 수정
+document.documentElement.style.setProperty('--bg-color', BG_COLOR);  // CSS 전파
 renderer.setClearColor(new THREE.Color(BG_COLOR), 1.0);
 document.body.style.background = BG_COLOR;
 document.body.appendChild(renderer.domElement);
@@ -103,9 +107,9 @@ const lPos = [
 ];
 const lCol = [
   new THREE.Vector3(0.87, 0.95, 0.90),  // 페일 민트 (주광)
-  new THREE.Vector3(0.50, 0.10, 0.05),  // 레드   ← 채도 강함, 완화 검토
-  new THREE.Vector3(0.10, 0.50, 0.05),  // 그린   ← 채도 강함, 완화 검토
-  new THREE.Vector3(0.10, 0.05, 1.00),  // 블루   ← 채도 강함, 완화 검토
+  new THREE.Vector3(0.30, 0.10, 0.05),  // 레드   ← 채도 강함, 완화 검토
+  new THREE.Vector3(0.10, 0.30, 0.05),  // 그린   ← 채도 강함, 완화 검토
+  new THREE.Vector3(0.10, 0.05, 0.50),  // 블루   ← 채도 강함, 완화 검토
 ];
 
 // ═══════════════════════════════════════════════════════
@@ -141,7 +145,7 @@ const mat = new THREE.ShaderMaterial({
                       Math.round(innerHeight * targetDPR)) }, // 실제 렌더 픽셀 해상도
 
     // 머티리얼 파라미터
-    uTransp:   { value: 0.05 },  // 0=Fresnel 기반 투명 / 1=완전 불투명
+    uTransp:   { value: 0.35 },  // 0=Fresnel 기반 투명 / 1=완전 불투명
     uRoughness:{ value: 0.65 },  // 0=거울 유리          / 1=서리 유리
 
     // blob displacement 억제 방향
@@ -175,7 +179,7 @@ const mat = new THREE.ShaderMaterial({
     uIridStr:      { value: 1.2  },  // irid 강도 (레퍼런스: 옥타 면 moderate 무지개)
     uPrismStr:     { value: 10.0 },  // 스펙트럼 분산 배율 (레퍼런스: 면 안 날카로운 스펙트럼 선)
     uPrismDisp:    { value: 0.013},  // Cauchy 분산 계수 (레퍼런스: 파장 분리 뚜렷)
-    uSemiEmissStr: { value: 0.7  },  // 블롭 자발광 강도 (레퍼런스: 블롭 강한 채도 자발광)
+    uSemiEmissStr: { value: 1.2  },  // 블롭 자발광 강도 (레퍼런스: 블롭 강한 채도 자발광)
 
     uLPos1: { value: lPos[0] }, uLPos2: { value: lPos[1] },
     uLPos3: { value: lPos[2] }, uLPos4: { value: lPos[3] },
@@ -557,7 +561,7 @@ const mat = new THREE.ShaderMaterial({
         d2 += 0.035;
       }
       float thickness    = d2 - d;
-      float transmission = exp(-thickness * 0.75);  // Beer-Lambert: absorb=0.75
+      float transmission = exp(-thickness * 0.55);  // Beer-Lambert: absorb=0.55
 
       vec3  backN_approx = -objN;
       vec3  p2_pert      = (ro + rd * d2) + backN_approx * rough * 0.12;
