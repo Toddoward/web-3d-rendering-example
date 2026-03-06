@@ -31,10 +31,10 @@ const lPos = [
   sph(LR, PI*0.88, PI*1.82),
 ];
 const lCol = [
-  new THREE.Vector3(0.87, 0.95, 0.90),
-  new THREE.Vector3(1.00, 0.10, 0.05),
-  new THREE.Vector3(0.10, 1.00, 0.05),
-  new THREE.Vector3(0.10, 0.05, 1.00),
+  new THREE.Vector3(1.00, 1.00, 1.00),  // 순백 (주 하이라이트, 분산의 베이스)
+  new THREE.Vector3(0.75, 0.88, 1.00),  // 쿨 화이트 (은청 톤, 그림자 영역 틴트)
+  new THREE.Vector3(1.00, 0.95, 0.82),  // 웜 화이트 (아이보리, 반대편 하이라이트)
+  new THREE.Vector3(0.65, 0.78, 0.88),  // 소프트 스틸 블루 (전체 앰비언트 틴트)
 ];
 
 const uTime        = { value: 0.0 };
@@ -55,7 +55,8 @@ const mat = new THREE.ShaderMaterial({
     uModelMat:    uModelMat,
     uNormalMat:   uNormalMat,
     uCamPos:      { value: camera.position },
-    uTransp:      { value: 0.5 },
+    uTransp:      { value: 0.25 },   // 0=Fresnel 투명, 1=완전불투명
+    uRoughness:   { value: 0.5 },   // 0=거울유리, 1=서리유리
     uLPos1: { value: lPos[0] }, uLPos2: { value: lPos[1] },
     uLPos3: { value: lPos[2] }, uLPos4: { value: lPos[3] },
     uLCol1: { value: lCol[0] }, uLCol2: { value: lCol[1] },
@@ -80,6 +81,7 @@ const mat = new THREE.ShaderMaterial({
     uniform mat3  uNormalMat;
     uniform vec3  uCamPos;
     uniform float uTransp;
+    uniform float uRoughness;
     uniform vec3  uLPos1, uLPos2, uLPos3, uLPos4;
     uniform vec3  uLCol1, uLCol2, uLCol3, uLCol4;
     varying vec3  vObjPos;
@@ -153,7 +155,7 @@ const mat = new THREE.ShaderMaterial({
     float _scene(vec3 p){
       // 정팔면체
       vec3 po = rotX(uTime*0.18) * rotY(uTime*0.32) * p;
-      float octa = _octa(po, 1.0) - 0.01;
+      float octa = _octa(po, 1.0) - 0.03;
 
       // 액체 느낌
       vec3 pb = rotX(-uTime*0.18) * rotY(-uTime*0.32) * p;
@@ -182,15 +184,42 @@ const mat = new THREE.ShaderMaterial({
       return d;
     }
 
-    // ── 광원(주 광원 + 반사광) ──
-    vec3 envColor(vec3 dir){
+    // ── 환경 반사 (roughness 기반 lobe) ──
+    vec3 envColor(vec3 dir, float rough){
+      float e1=mix(48.,3.,rough*rough), e2=mix(28.,3.,rough*rough);
+      float e3=mix(52.,3.,rough*rough), e4=mix(22.,3.,rough*rough);
       vec3 c=vec3(0.);
-      c+=uLCol1*pow(max(dot(dir,normalize(uLPos1)),0.),48.)*5.0;
-      c+=uLCol2*pow(max(dot(dir,normalize(uLPos2)),0.),28.)*3.5;
-      c+=uLCol3*pow(max(dot(dir,normalize(uLPos3)),0.),52.)*5.0;
-      c+=uLCol4*pow(max(dot(dir,normalize(uLPos4)),0.),22.)*2.5;
+      c+=uLCol1*pow(max(dot(dir,normalize(uLPos1)),0.),e1)*5.0;
+      c+=uLCol2*pow(max(dot(dir,normalize(uLPos2)),0.),e2)*3.5;
+      c+=uLCol3*pow(max(dot(dir,normalize(uLPos3)),0.),e3)*5.0;
+      c+=uLCol4*pow(max(dot(dir,normalize(uLPos4)),0.),e4)*2.5;
       c+=mix(vec3(0.01,0.01,0.03),vec3(0.04,0.05,0.09),dir.y*0.5+0.5)*0.5;
       return c;
+    }
+
+    // ── GGX NDF ──
+    float D_GGX(float NdotH, float rough){
+      float a2=rough*rough*rough*rough;
+      float d=NdotH*NdotH*(a2-1.)+1.;
+      return a2/(PI*d*d+0.0001);
+    }
+    // ── Smith-Schlick Geometry ──
+    float G_Smith(float NdotV2, float NdotL, float rough){
+      float k=(rough+1.)*(rough+1.)/8.;
+      float gv=NdotV2/(NdotV2*(1.-k)+k);
+      float gl=NdotL/(NdotL*(1.-k)+k);
+      return gv*gl;
+    }
+    // ── Dan Bruton 파장→RGB (380~700nm) ──
+    vec3 wl2rgb(float w){
+      vec3 c;
+      if     (w<440.) c=vec3(-(w-440.)/(440.-380.),0.,1.);
+      else if(w<490.) c=vec3(0.,(w-440.)/(490.-440.),1.);
+      else if(w<510.) c=vec3(0.,1.,-(w-510.)/(510.-490.));
+      else if(w<580.) c=vec3((w-510.)/(580.-510.),1.,0.);
+      else if(w<645.) c=vec3(1.,-(w-645.)/(645.-580.),0.);
+      else            c=vec3(1.,0.,0.);
+      return clamp(c,0.,1.);
     }
 
     float fresnel(vec3 V, vec3 N, float ior){
@@ -222,61 +251,68 @@ const mat = new THREE.ShaderMaterial({
       float NdotV = clamp(dot(N, V), 0., 1.);
 
       vec3 albedo = vec3(0.88, 0.91, 0.95);
+      float rough = uRoughness;
+      float F0    = pow((1.-1.45)/(1.+1.45),2.);  // ~0.035
 
-      // ── 메탈릭 환경 반사 ──
-      vec3 refl  = envColor(reflect(-V, N)) * 2.2 * albedo;
-      float fres = fresnel(V, N, 1.45);
-      vec3  base = mix(albedo*0.015, refl, mix(0.75, 1.0, fres));
+      // ── 환경 반사 (roughness 기반) ──
+      vec3 refl     = envColor(reflect(-V, N), rough) * 2.2 * albedo;
+      float fres    = fresnel(V, N, 1.45);
+      vec3  coloredRefl;
+      {
+        float filmVar  = NdotV + (_vn((ro+rd*d)*4.5+uTime*0.18)-0.5)*0.35;
+        vec3  thinFilm = 0.5+0.5*cos(filmVar*PI*1.8+vec3(0.,2.094,4.189));
+        coloredRefl    = refl * mix(vec3(1.0), thinFilm*1.6, 0.75);
+      }
+      vec3 base = coloredRefl * mix(0.5, 1.0, fres);
 
-      // ── Blinn-Phong 스펙큘러 4광원 ──
-      float sh = 320.0;
-      vec3 H1=normalize(normalize(uLPos1-wPos)+V);
-      vec3 H2=normalize(normalize(uLPos2-wPos)+V);
-      vec3 H3=normalize(normalize(uLPos3-wPos)+V);
-      vec3 H4=normalize(normalize(uLPos4-wPos)+V);
-      vec3 spec = uLCol1*pow(max(dot(N,H1),0.),sh)
-                + uLCol2*pow(max(dot(N,H2),0.),sh*0.55)
-                + uLCol3*pow(max(dot(N,H3),0.),sh)
-                + uLCol4*pow(max(dot(N,H4),0.),sh*0.38);
+      // ── GGX Cook-Torrance 스펙큘러 4광원 ──
+      vec3 spec = vec3(0.);
+      vec3 lightDirs[4];
+      vec3 lightCols[4];
+      lightDirs[0]=normalize(uLPos1-wPos); lightCols[0]=uLCol1;
+      lightDirs[1]=normalize(uLPos2-wPos); lightCols[1]=uLCol2;
+      lightDirs[2]=normalize(uLPos3-wPos); lightCols[2]=uLCol3;
+      lightDirs[3]=normalize(uLPos4-wPos); lightCols[3]=uLCol4;
+      for(int i=0;i<4;i++){
+        vec3  L     = lightDirs[i];
+        vec3  H     = normalize(L+V);
+        float NdotL = max(dot(N,L),0.);
+        float NdotH = max(dot(N,H),0.);
+        float VdotH = max(dot(V,H),0.);
+        float D     = D_GGX(NdotH, rough);
+        float G     = G_Smith(NdotV, NdotL, rough);
+        vec3  F     = vec3(F0)+(1.-F0)*pow(1.-VdotH,5.);
+        spec       += lightCols[i] * (D*G*F/(4.*NdotV*NdotL+0.001)) * NdotL * 2.5;
+      }
 
-      // ── 프리즘 색분산: IOR 채널 분리 ──
-      float iorR=1.37, iorG=1.46, iorB=1.66;
-      vec3 L1d=normalize(uLPos1-wPos), L3d=normalize(uLPos3-wPos);
-      vec3 prism=vec3(
-        pow(max(dot(N,normalize(L1d*iorR+V)),0.),sh*1.15)+pow(max(dot(N,normalize(L3d*iorR+V)),0.),sh*1.15),
-        pow(max(dot(N,normalize(L1d*iorG+V)),0.),sh*0.95)+pow(max(dot(N,normalize(L3d*iorG+V)),0.),sh*0.95),
-        pow(max(dot(N,normalize(L1d*iorB+V)),0.),sh*0.78)+pow(max(dot(N,normalize(L3d*iorB+V)),0.),sh*0.78)
-      )*4.0;
+      // ── 스펙트럼 분산 (Dan Bruton 8파장 샘플) ──
+      vec3 prism = vec3(0.);
+      vec3 Ld1=lightDirs[0], Ld3=lightDirs[2];
+      for(int i=0;i<8;i++){
+        float wl  = mix(400.,700.,float(i)/7.);
+        float ior = 1.45 + 0.0035/(wl*wl*0.000001);
+        float sh  = mix(800., 200., rough);
+        float s1  = pow(max(dot(N,normalize(Ld1*ior+V)),0.),sh);
+        float s3  = pow(max(dot(N,normalize(Ld3*ior+V)),0.),sh);
+        prism    += wl2rgb(wl) * (s1+s3);
+      }
+      prism /= 8.0;
 
-      // ── Thin-film 이리데슨스 (multiplicative) ──
-      float filmVar = NdotV + (_vn((ro+rd*d)*4.5+uTime*0.18)-0.5)*0.35;
-      vec3  thinFilm = 0.5+0.5*cos(filmVar*PI*1.8+vec3(0.,2.094,4.189));
-      vec3  coloredRefl = refl * mix(vec3(1.0), thinFilm*1.6, 0.75);
-      base = coloredRefl * mix(0.5, 1.0, fres);
+      // ── 림 + 이리데슨스 엣지 ──
+      vec3 rim      = pow(1.-NdotV,3.2)*vec3(0.70,0.90,1.00)*0.8;
+      float iridM   = pow(1.-NdotV,3.8);
+      vec3  irid    = (0.5+0.5*cos((1.-NdotV)*PI*6.5+vec3(0.,2.094,4.189)))*iridM*0.7;
 
-      // ── 림 라이트 ──
-      vec3 rim = pow(1.-NdotV, 3.2) * vec3(0.70, 0.90, 1.00) * 0.8;
+      // ── Alpha: FresnelSchlickRoughness ──
+      float NdotV_a  = clamp(-dot(rd,objN),0.,1.);
+      float maxFr    = max(1.-rough, F0);
+      float fresnelR = F0+(maxFr-F0)*pow(1.-NdotV_a,5.);
+      float alpha    = mix(mix(fresnelR,1.,rough), 1., uTransp);
 
-      // ── 이리데슨스 엣지 ──
-      float iridMask = pow(1.-NdotV, 3.8);
-      vec3  irid = (0.5+0.5*cos((1.-NdotV)*PI*6.5+vec3(0.,2.094,4.189)))*iridMask*0.7;
-
-      // Schlick Fresnel 반사율을 alpha로 사용
-      float NdotV_a     = clamp(-dot(rd, objN), 0.0, 1.0);
-      float r0          = pow((1.0 - 1.45) / (1.0 + 1.45), 2.0);
-      float fresnelRefl = r0 + (1.0 - r0) * pow(1.0 - NdotV_a, 5.0);
-      // uTransp=0: 불투명도
-      float alpha       = mix(fresnelRefl, 1.0, uTransp);
-
-      // premultiplied alpha:
-      //   diffuse * alpha → 배경과 alpha 블렌딩
-      //   specular        → alpha 무관 additive
-      // blendFunc(ONE, ONE_MINUS_SRC_ALPHA) 에서:
-      //   result = (diffuse*alpha + specular)*1 + dst*(1-alpha)
+      // ── Premultiplied alpha 출력 ──
       vec3 diffCol = tonemapGamma(base + irid + rim);
-      vec3 specCol = tonemapGamma(spec*2.0 + prism);
-
-      gl_FragColor = vec4(diffCol * alpha + specCol, alpha);
+      vec3 specCol = tonemapGamma(spec + prism*3.0);
+      gl_FragColor = vec4(diffCol*alpha + specCol, alpha);
     }
   `,
 });
