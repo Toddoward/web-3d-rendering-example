@@ -146,7 +146,7 @@ const mat = new THREE.ShaderMaterial({
 
     // 머티리얼 파라미터
     uTransp:   { value: 0.35 },  // 0=Fresnel 기반 투명 / 1=완전 불투명
-    uRoughness:{ value: 0.65 },  // 0=거울 유리          / 1=서리 유리
+    uRoughness:{ value: 0.975 },  // 0=거울 유리          / 1=서리 유리
 
     // blob displacement 억제 방향
     // 해당 방향과 평행한 위치(pole)에서 blob이 사라지고 정팔면체 면이 노출됨
@@ -168,18 +168,18 @@ const mat = new THREE.ShaderMaterial({
     // displacement와 독립적으로 자발광 영역을 별도 제어
     // uEmissPoleEdge: emissive poleMask 전환 구간
     //   displacement보다 넓게 설정 → 발광 영역이 displacement보다 크게
-    uEmissPoleEdge: { value: new THREE.Vector2(0.00, 0.475) },
+    uEmissPoleEdge: { value: new THREE.Vector2(-0.35, 0.475) },
     // uEmissGravEdge: emissive gravBias smoothstep 입력 구간
     uEmissGravEdge: { value: new THREE.Vector2(-0.2, 0.6) },
     // uEmissGravBias: emissive gravBias 가중치 (x=베이스, y=진폭)
-    uEmissGravBias: { value: new THREE.Vector2(0.7, 0.3) },
+    uEmissGravBias: { value: new THREE.Vector2(0.7, 0.2) },
 
     // 무지개 파라미터 (레퍼런스 이미지 분석 기준)
-    uIridExp:      { value: 3.5  },  // irid 분포 exponent: 낮을수록 면 전체로 퍼짐 (레퍼런스: 면 전체 무지개 띠)
-    uIridStr:      { value: 1.2  },  // irid 강도 (레퍼런스: 옥타 면 moderate 무지개)
+    uIridExp:      { value: 5.5  },  // irid 분포 exponent: 낮을수록 면 전체로 퍼짐 (레퍼런스: 면 전체 무지개 띠)
+    uIridStr:      { value: 3.5  },  // irid 강도 (레퍼런스: 옥타 면 moderate 무지개)
     uPrismStr:     { value: 10.0 },  // 스펙트럼 분산 배율 (레퍼런스: 면 안 날카로운 스펙트럼 선)
-    uPrismDisp:    { value: 0.013},  // Cauchy 분산 계수 (레퍼런스: 파장 분리 뚜렷)
-    uSemiEmissStr: { value: 1.2  },  // 블롭 자발광 강도 (레퍼런스: 블롭 강한 채도 자발광)
+    uPrismDisp:    { value: 0.013 },  // Cauchy 분산 계수 (레퍼런스: 파장 분리 뚜렷)
+    uSemiEmissStr: { value: 5.5  },  // 블롭 자발광 강도 (레퍼런스: 블롭 강한 채도 자발광)
 
     uLPos1: { value: lPos[0] }, uLPos2: { value: lPos[1] },
     uLPos3: { value: lPos[2] }, uLPos4: { value: lPos[3] },
@@ -303,6 +303,7 @@ const mat = new THREE.ShaderMaterial({
     }
     mat3 rotY(float a){ float c=cos(a),s=sin(a); return mat3(c,0,s, 0,1,0, -s,0,c); }
     mat3 rotX(float a){ float c=cos(a),s=sin(a); return mat3(1,0,0, 0,c,-s, 0,s,c); }
+    // mat3 rotZ(float a){ float c=cos(a),s=sin(a); return mat3(c,-s,0, s,c,0, 0,0,1); }
 
     // ── [3] SDF 씬 컴포지션 ───────────────────────────
     // rot: 프레임당 1회 계산된 회전 행렬 (main()에서 전달) — 재계산 방지
@@ -314,12 +315,12 @@ const mat = new THREE.ShaderMaterial({
       // 정팔면체 (s=1.0, bevel=0.01)
       // _octa 결과를 octaDist에 캐싱 → octa와 octaShell 모두 재사용
       float octaDist = _octa(po, 1.0);
-      float octa     = octaDist - 0.01;
+      float octa     = octaDist - 0.005;
 
       // blob: 정팔면체 쉘(opOnion)을 기저로 Simplex noise displacement 적용
       //   q:  noise 입력 좌표, freq=1.5, 시간축으로 flow
       //   domain warp: 접선 방향(ang) 흐름으로 주름에 방향성 부여 (강도 0.22)
-      //   octaShell: opOnion(octa, s=1.0, thickness=0.02) — 정팔면체 표면 근방 쉘
+      //   octaShell: opOnion(octa, s=1.0, thickness=0.01) — 정팔면체 표면 근방 쉘
       //   displacement 진폭: ±0.2 (noise [0,1] → offset 기준 -0.75 적용)
       float flow  = uTime * 0.18;
       float ang   = atan(po.z, po.x);
@@ -338,7 +339,7 @@ const mat = new THREE.ShaderMaterial({
       //   uDispGravBias.x + uDispGravBias.y * smoothstep(uDispGravEdge.x, uDispGravEdge.y, -y)
       float gravBias = uDispGravBias.x + uDispGravBias.y * smoothstep(uDispGravEdge.x, uDispGravEdge.y, -normalize(po).y);
 
-      float octaShell = abs(octaDist) - 0.02;  // octaDist 재사용 (_octa 추가 호출 없음)
+      float octaShell = abs(octaDist) - 0.0075;  // octaDist 재사용 (_octa 추가 호출 없음)
       float blob      = octaShell + (_vn(w) - 0.75) * 0.2 * poleMask * gravBias;
 
       // smooth union k=0.1: 두 표면 경계 10% 범위 내 C1 블렌딩
@@ -430,6 +431,9 @@ const mat = new THREE.ShaderMaterial({
       // 회전 행렬 1회 계산 — _scene() 호출(최대 86회)마다 재계산 방지
       // _rm(80스텝) + _normal(6-tap) = 86회 × (2×cos/sin + mat3 mul) 절감
       mat3 _rot = rotX(uTime*0.18) * rotY(-uTime*0.32);
+
+      // 레퍼런스 이미지와 동일한 구도, 적용 시 위 회전 주석 필요
+      // mat3 _rot = rotX(-0.0872665) * rotY(0.226893) * rotZ(-0.453786);
 
       float d   = _rm(ro, rd, _rot);
       bool  hit = d < 8.0;
